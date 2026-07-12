@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.uv/
+
+# IDE
+.vscode/
+.idea/
+
+# Data (三款共享数据根在 d:\braindata，不进仓库)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Thumbnails / cache
+cache/
+thumbs/
+
+# Logs
+logs/
+*.log

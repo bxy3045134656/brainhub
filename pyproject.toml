@@ -1,0 +1,41 @@
+[project]
+name = "brainhub"
+version = "0.1.0"
+description = "统一 Web 前端 + 网盘 + MCP 网关 + 运维 agent — Brain 产品族自用主入口"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "鑫宇" }]
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
+    "python-multipart",
+    "anthropic",
+    "watchdog",
+    "Pillow",
+    "pdf2image",
+    "httpx",
+    "apscheduler",
+    # brainmem 本地 editable 装（共享 memory.db + 调检索/记忆 API）
+    "brainmem",
+]
+
+[project.scripts]
+brainhub = "brainhub.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["brainhub"]
+
+[tool.uv.sources]
+brainmem = { path = "../brainmem", editable = true }
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "ruff",
+]
