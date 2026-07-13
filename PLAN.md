@@ -4,10 +4,11 @@
 > 新会话读这份就够开工。前置：BrainMem 已验收完成（接口已稳）。
 >
 > **状态（2026-07-13）：Phase 2 已交付，6 项验收通过**（详见 [README.md](README.md)）。
+> **状态（2026-07-14）：管道客户端就绪**（BrainHub↔BrainBridge 命名管道，见下「管道客户端」段；send_matrix_msg 实现方按宪法修订改归 BrainHub）。
 > 本文件保留计划期描述，关键差异已就地标注：
 > - 运维 agent 按"分阶段"降级——Phase 2 只留 OpsAgent 接口壳，extract-memories 走直调 AsyncAnthropic，ReAct 循环留 Phase 3。
 > - 与 BrainMem 的接口以实际代码为准（Memorize 是类不是模块函数），见 README「与 BrainMem 的接口」。
-> - 18 个单测全过（archive/projects/db）。
+> - 18 个单测全过（archive/projects/db）；管道客户端加 9 个（含回环），共 27。
 
 ## BrainHub 定位
 
@@ -129,6 +130,36 @@ CREATE TABLE ops_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, task TEXT,
 - 缩略图：Pillow 处理图片，pdf2image 处理 PDF 首页（需 poppler 在 PATH，缺失降级 broken-image），**懒生成**按预览请求、按 sha256 缓存到 `d:\braindata\cache\thumbs\`。
 - 模板：Starlette 1.x 的 `Jinja2Templates.TemplateResponse` 签名要求 `TemplateResponse(request, name, context)`（不是旧的 `TemplateResponse(name, context)`），所有路由按新签名调。
 - Store 共享：单例 Store（镜像 brainmem.mcp 懒加载）+ 独立 hub_conn 连同 memory.db（纯表无 vec/FTS，WAL 双连接，永不把 vec0 写和纯表写放同一 `BEGIN`）。
+
+## 管道客户端（BrainHub ↔ BrainBridge，2026-07-14 加）
+
+集成联调前先把 BrainHub 端命名管道就绪。对齐 BrainBridge `matrix/pipe.go` 顶部注释 + 协议宪法 §3.2。
+
+**管道 + 方向**：
+
+| 管道名 | 方向 | BrainHub 端 | 内容 |
+|---|---|---|---|
+| `\\.\pipe\brain-matrix-out` | BrainHub→Bridge | client（`pipe/writer.py`，CreateFile 连入写） | envelope 每行 JSON + `\n` |
+| `\\.\pipe\brain-matrix-in` | Bridge→BrainHub | listener（`pipe/listener.py`，CreateNamedPipe 等连入） | Matrix 收到的消息（envelope） |
+| `\\.\pipe\brain-agent-status` | Bridge→BrainHub | listener（同上） | `{agents:[...], ts}` 帧 |
+
+方向策略：BrainHub 当 listener（in + agent_status 两条，CreateNamedPipe），BrainBridge 当 client 连入写；matrix-out 反向（BrainHub client 连 Bridge listener）。这样 Python 端用 pywin32 当 server，避免当 client 的麻烦。
+
+**envelope**（协议宪法 §3，对齐 BrainBridge `matrix/envelope.go`）：`{type, from, to, task_id, spec_ref, text, ts}`，type ∈ `task_assign`/`task_result`/`heartbeat`/`notify`，`task_id`/`spec_ref` 空 `omitempty`。帧：每行一个 UTF-8 JSON，`\n` 分隔，fire-and-forget 无 ack，写失败仅 log。
+
+**实现要点**：
+- `pipe/protocol.py` — Envelope dataclass + `build_envelope()` + 管道名常量 + `pipe_path()`（Windows `\\.\pipe\<name>` / Linux `/tmp/<name>.sock`）。
+- `pipe/writer.py` — pywin32 `CreateFile` 连 `brain-matrix-out`，`WriteFile`+`FlushFileBuffers`；连不上重试 5 次（`WaitNamedPipe` 等对端 listener 过渡期，ERROR_FILE_NOT_FOUND=2 / ERROR_PIPE_BUSY=231）；缺 pywin32 降级 `open(path,'r+b')`。进程级单例 + `send_matrix()` 便捷函数。fire-and-forget：对端没起返回 False 不抛。
+- `pipe/listener.py` — `_PipeListener` 后台线程：`CreateNamedPipe`（PIPE_TYPE_BYTE|READMODE_BYTE|WAIT，单实例）→ `ConnectNamedPipe` 阻塞等连入 → `_read_loop` 按行读（`ReadFile` 返回 `(hr, data)` 不是 `(data, size)`！坑）→ `_handle_line` 解析 JSON。读到帧经 `run_coroutine_threadsafe` 调度进主事件循环推 WSBroker（topic=`matrix_in`/`agent_status`）。非 Windows / 缺 pywin32 退化到不启，不阻塞 web。
+- `mcp.py` — 第 12 工具 `send_matrix_msg(to, text, type="notify", task_id?, spec_ref?, from?)` 调 `send_matrix()`。
+- `web/app.py` — lifespan 起 `start_listeners()`（两个 listener），关闭时 `stop_listeners()`。
+- `pyproject.toml` — 加 `pywin32>=305 ; sys_platform == 'win32'`。
+
+**踩的坑（已修）**：
+1. `pipe_path` Windows 反斜杠：`r"\\.\pipe\\"` raw string 实际是 `\\.\pipe\\`（pipe 后两个反斜杠，错），改普通字符串 `"\\\\.\\pipe\\"` 拼出标准 `\\.\pipe\`。
+2. pywin32 `ReadFile` 返回 `(hr, data)` 不是 `(data, size)`——原写法把 error code 当 chunk，listener 读到"0 字节"。修成 `hr, data = ReadFile(...)`。
+
+**待联调**：BrainBridge `matrix/pipe.go` Windows 端 go-winio listener 未接（返回 errWindowsPipeNotImpl）。BrainHub 端就绪，Bridge 补 go-winio listener（matrix-out）+ client（in/agent-status 连入）即可对上。验证标志：`send_matrix_msg` 的 `ok` 变 True；前端 `/ws` 订阅 `matrix_in`/`agent_status` 收到 Bridge 推来的帧。
 
 ## 数据路径
 

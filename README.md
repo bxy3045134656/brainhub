@@ -15,7 +15,8 @@ BrainMem 已验收完成（Phase 1+2+3 全做完：知识库 RAG + 记忆六层 
 - [brainhub/storage/](brainhub/storage/) — [files.py](brainhub/storage/files.py) 文件 CRUD+缩略图（Pillow/pdf2image 懒生成）+ [archive.py](brainhub/storage/archive.py) `write_note` 归档（硬编码完整 Index.md 规则 + 漂移单测）+ [db.py](brainhub/storage/db.py) 懒加载单例 Store（镜像 brainmem.mcp）+ 独立 hub_conn（WAL 双连接同库）
 - [brainhub/projects/](brainhub/projects/models.py) — 项目/任务状态机（todo→doing→blocked→done，严格流，非法转移 raise）+ 拖拽落点
 - [brainhub/ops/](brainhub/ops/) — [extract.py](brainhub/ops/extract.py) 记忆提取（OpenClaw trajectory.jsonl → AsyncAnthropic 直调 → memory.db）+ [agent.py](brainhub/ops/agent.py) OpsAgent 接口壳（ReAct 留 Phase 3）+ [cron.py](brainhub/ops/cron.py) APScheduler（归档02:30/索引03:00/提取23:00/健康5min/Index更新03:30）
-- [brainhub/mcp.py](brainhub/mcp.py) — fastmcp 网关 11 工具：BrainHub 自有 7 个（write_note/read_file/list_files/list_projects/query_project/update_project/health_check）+ 转发 brainmem 4 个（search_knowledge/query_memory/write_memory/reindex）
+- [brainhub/pipe/](brainhub/pipe/) — 命名管道客户端（BrainHub↔BrainBridge）：[protocol.py](brainhub/pipe/protocol.py) envelope 构造（对齐协议宪法§3）+ [writer.py](brainhub/pipe/writer.py) 写客户端连 `brain-matrix-out`（pywin32 CreateFile，失败重试+WaitNamedPipe，fire-and-forget 不抛）+ [listener.py](brainhub/pipe/listener.py) 读端 listener 起 `brain-matrix-in`+`brain-agent-status`（CreateNamedPipe 后台线程，按行解析 JSON 推 WSBroker）
+- [brainhub/mcp.py](brainhub/mcp.py) — fastmcp 网关 12 工具：BrainHub 自有 8 个（write_note/read_file/list_files/list_projects/query_project/update_project/health_check/**send_matrix_msg**）+ 转发 brainmem 4 个（search_knowledge/query_memory/write_memory/reindex）
 
 **验收**（已跑通）：① Web 目录树+语义搜索 ② Inbox 归档到 3-Knowledge/FPGA ③ extract-memories 写 memory.db ④ query_memory 返回健康事实+心跳异常实体 ⑤ 看板建项目+拖拽状态机 ⑥ MCP 11 工具全注册+health_check 全绿。18 个单测全过。
 
@@ -30,6 +31,7 @@ BrainMem 已验收完成（Phase 1+2+3 全做完：知识库 RAG + 记忆六层 
 | 归档规则 | 硬编码 Index.md 关键词→目录表 | 确定性、可解释，不靠 LLM 推断目录。LLM 只用于记忆提取 |
 | 与 BrainMem 关系 | import brainmem 当库用 + 共享 memory.db | BrainMem 拥有 memory.db 写权，BrainHub ops 也写（同库靠 SQLite WAL 并发）。不重新实现检索 |
 | 与 OpenClaw 边界 | OpenClaw 诺诺=对话/社交/梦境；BrainHub ops=知识库索引/记忆维护/归档 | 避免双写冲突。诺诺调知识库走 MCP 只读为主，写操作由 ops 统一 |
+| 与 BrainBridge 接口 | BrainHub 暴露 send_matrix_msg MCP 工具，经命名管道转发给 Bridge daemon | agent 单一连 BrainHub MCP；BrainHub 当 listener(in+agent_status) / client(matrix-out)，pywin32；fire-and-forget。详见 [docs/protocol-constitution.md](docs/protocol-constitution.md) §3.2 |
 | 部署形态 | BrainHub 当主进程，拉起 brain-bridge 子进程（Phase 3） | 自用期一个 `brainhub start` 全拉起，对外像一个软件 |
 
 ## 文档索引
@@ -48,7 +50,23 @@ BrainHub import brainmem，直接调这些（不是走 MCP，是进程内 Python
 - `brainmem.indexer.Indexer` — `Indexer(store).index_root(root, full)` / `.index_roots([roots], full)`（多根）
 - `brainmem.searcher.load_config()` — 读 `BRAIN_DATA/config.toml`（可选，有默认值）
 
-对外 MCP 工具：BrainHub 自己实现的（write_note/read_file/list_files/projects/health_check）+ 转发 BrainMem 的（search_knowledge/query_memory/write_memory/reindex）。
+对外 MCP 工具：BrainHub 自己实现的（write_note/read_file/list_files/projects/health_check/**send_matrix_msg**）+ 转发 BrainMem 的（search_knowledge/query_memory/write_memory/reindex）。
+
+## 与 BrainBridge 的接口（命名管道）
+
+BrainHub 不直连 Matrix，经命名管道把消息交给 BrainBridge daemon 真正收发。agent 只连 BrainHub MCP（单一入口），调 `send_matrix_msg` 时 BrainHub 往管道写 envelope，Bridge 读后转发。
+
+| 管道 | 方向 | BrainHub 端 | 内容 |
+|---|---|---|---|
+| `\\.\pipe\brain-matrix-out` | BrainHub→Bridge | client（`pipe/writer.py`，CreateFile 连入写） | envelope 每行 JSON + `\n` |
+| `\\.\pipe\brain-matrix-in` | Bridge→BrainHub | listener（`pipe/listener.py`，CreateNamedPipe 等连入） | Matrix 收到的消息 |
+| `\\.\pipe\brain-agent-status` | Bridge→BrainHub | listener（同上） | `{agents:[...], ts}` 帧 |
+
+envelope = 协议宪法 §3（`{type, from, to, task_id, spec_ref, text, ts}`，type ∈ task_assign/task_result/heartbeat/notify）。fire-and-forget 无 ack，写失败仅 log 不抛。读端按行解析后经 `run_coroutine_threadsafe` 推 WSBroker（topic=`matrix_in`/`agent_status`），前端 `/ws` 订阅接收。
+
+实现：pywin32（Windows 命名管道 listener 必须，stdlib `open` 做不了 listener）；退化——非 Windows / 缺 pywin32 时 listener 不启，写端降级 `open()`，不阻塞 web。
+
+⚠ 待联调：BrainBridge 的 `matrix/pipe.go` Windows 端 go-winio listener 尚未接（返回 errWindowsPipeNotImpl）。BrainHub 端已就绪，Bridge 补 go-winio 后即可端到端联调（`send_matrix_msg` 的 `ok` 会变 True，前端 `/ws` 能收 Bridge 推来的消息）。9 个单测含回环（起 listener→writer 连入写一行→on_frame 收到解析 dict）。
 
 ## 开发环境
 
