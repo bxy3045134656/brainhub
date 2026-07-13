@@ -17,6 +17,9 @@ dependencies = [
     "pdf2image",
     "httpx",
     "apscheduler",
+    # Windows 命名管道 listener（brain-matrix-in/agent-status 读端）需 pywin32；
+    # 纯 stdlib 做不了 listener。非 Windows 平台不强装（退化到 listener 不起，写端用 open）。
+    "pywin32>=305 ; sys_platform == 'win32'",
     # brainmem 本地 editable 装（共享 memory.db + 调检索/记忆 API）
     "brainmem",
 ]

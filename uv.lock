@@ -165,6 +165,7 @@ dependencies = [
     { name = "pdf2image" },
     { name = "pillow" },
     { name = "python-multipart" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "watchdog" },
 ]
@@ -186,6 +187,7 @@ requires-dist = [
     { name = "pdf2image" },
     { name = "pillow" },
     { name = "python-multipart" },
+    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=305" },
     { name = "uvicorn", extras = ["standard"] },
     { name = "watchdog" },
 ]

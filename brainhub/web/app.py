@@ -54,8 +54,23 @@ async def lifespan(app: FastAPI):
     from brainhub.ops.cron import start_scheduler
     app.state.scheduler = start_scheduler(app)
 
+    # 管道读 listeners（Bridge→BrainHub：brain-matrix-in + brain-agent-status）
+    # 非 Windows / 缺 pywin32 时返回 ok=False，不阻塞 web。
+    from brainhub.pipe.listener import start_listeners, stop_listeners
+    try:
+        app.state.pipe_listeners = start_listeners()
+    except Exception:
+        logger.exception("管道 listener 起失败（不影响 web）")
+        app.state.pipe_listeners = None
+
     yield
 
+    # 停管道 listeners
+    if app.state.pipe_listeners is not None:
+        try:
+            stop_listeners()
+        except Exception:
+            pass
     # 关闭调度器 + 关闭连接
     if app.state.scheduler is not None:
         try:

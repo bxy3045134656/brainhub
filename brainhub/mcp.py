@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """BrainHub MCP 网关 — fastmcp，暴露 BrainHub 工具 + 转发 BrainMem 工具。
 
-协议宪法 §1 的 11 个工具：
+协议宪法 §1 的 11 个工具 + Matrix 管道写客户端：
 - BrainHub 自有：write_note / read_file / list_files / list_projects /
-  query_project / update_project / health_check
+  query_project / update_project / health_check / send_matrix_msg（→ brain-matrix-out）
 - 转发 brainmem（BrainHub 网关代理，经自己的单例调底层 API）：
   search_knowledge / query_memory / write_memory / reindex
 
@@ -198,6 +198,39 @@ def update_project(project_id: str, status: str | None = None,
         )
         return repo.get(project_id) or {"error": "更新后未找到"}
     return {"error": "需提供 status 或 name"}
+
+
+# ---- Matrix 消息（brain-matrix-out 写客户端，→ BrainBridge）----
+
+@mcp.tool
+def send_matrix_msg(
+    to: str,
+    text: str,
+    type: str = "notify",
+    task_id: str = "",
+    spec_ref: str = "",
+    from_: str = "brainhub",
+) -> dict[str, Any]:
+    """发一条 Matrix 消息到 brain-matrix-out 管道（→ BrainBridge 转 Matrix 房间）。
+
+    协议宪法 §3 envelope：{type, from, to, task_id, spec_ref, text, ts}。
+    fire-and-forget 无 ack；BrainBridge listener 未起时返回 ok=False（已 log，不抛）。
+
+    Args:
+        to: 接收方 agent_id 或 Matrix room_id。
+        text: 消息正文。
+        type: task_assign / task_result / heartbeat / notify（默认 notify）。
+        task_id: 任务标识（派发/结果时填，notify 可空）。
+        spec_ref: 任务规格引用（minio://path，可空）。
+        from_: 发送方 agent_id（默认 brainhub）。
+    Returns:
+        {ok, pipe, type, to, error?}。
+    """
+    from brainhub.pipe.writer import send_matrix
+    return send_matrix(
+        type=type, to=to, text=text,
+        task_id=task_id, spec_ref=spec_ref, from_=from_,
+    )
 
 
 # ---- 健康检查 ----
