@@ -1,0 +1,8 @@
+{# 文件预览 partial #}
+{% if note %}
+<div class="text-amber-600 text-sm mb-2">{{ note }}</div>
+{% endif %}
+<div class="text-xs text-gray-500 mb-2 truncate">📄 {{ path }}</div>
+{% if content is not none %}
+<pre class="text-sm whitespace-pre-wrap break-words bg-gray-50 p-3 rounded border max-h-[80vh] overflow-auto">{{ content }}</pre>
+{% endif %}

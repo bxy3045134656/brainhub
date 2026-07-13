@@ -1,0 +1,27 @@
+{# 搜索结果 partial：HTMX hx-post /api/search 灌入 #main #}
+<div class="max-w-4xl mx-auto">
+    <h2 class="text-sm font-semibold text-gray-600 mb-3">
+        搜索结果{% if q %}：“{{ q }}”{% endif %}
+    </h2>
+    {% if error %}
+    <div class="text-red-600 text-sm bg-red-50 border border-red-200 rounded p-3">
+        搜索失败：{{ error }}
+        <div class="text-xs text-gray-500 mt-1">（首次搜索会加载 bge 模型，请稍候）</div>
+    </div>
+    {% elif not results %}
+    <div class="text-gray-400 text-sm">未找到相关内容。</div>
+    {% else %}
+    <ul class="space-y-2">
+    {% for r in results %}
+        <li class="bg-white border rounded p-3">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-blue-700 truncate">{{ r.doc_path }}</span>
+                <span class="text-xs text-gray-400">综合分 {{ r.score }} · {{ r.source }}</span>
+            </div>
+            <div class="text-sm text-gray-700 line-clamp-3">{{ r.chunk_text }}</div>
+            {% if r.mtime %}<div class="text-xs text-gray-400 mt-1">{{ r.mtime }}</div>{% endif %}
+        </li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+</div>

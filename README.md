@@ -5,17 +5,21 @@
 
 ## 当前状态
 
-**Phase 2 — 统一前端 + 网盘 + 运维 agent（待开工）**
+**Phase 2 — 统一前端 + 网盘 + 运维 agent（已交付，6 项验收通过）**
 
-BrainMem 已验收完成（Phase 1+2+3 全做完：知识库 RAG + 记忆六层 + 图谱 + 三路混合检索 + 6 个 MCP 工具 + 测试）。BrainHub 现在可以安全地 import brainmem 当库用，接口已稳。
+BrainMem 已验收完成（Phase 1+2+3 全做完：知识库 RAG + 记忆六层 + 图谱 + 三路混合检索 + MCP 工具 + 测试）。BrainHub import brainmem 当库用，共享 `d:\braindata\memory.db`。
 
-交付物：
-- `brainhub/cli.py` — `brainhub start/stop/status`
-- `brainhub/web/` — FastAPI + Jinja2 + HTMX + Alpine + Tailwind(CDN)，面板：知识库浏览/搜索/网盘/看板/记忆/agent状态/运维日志
-- `brainhub/storage/` — 文件 CRUD + 元数据 + 缩略图 + `write_note` 归档（硬编码 Index.md 规则）
-- `brainhub/projects/` — 项目/任务 CRUD + 状态机（todo→doing→blocked→done）
-- `brainhub/ops/` — 运维 agent（Anthropic SDK + xopglm52）+ Cron（归档/索引/记忆提取/健康检查/Index.md 更新）
-- MCP 工具：`write_note` / `read_file` / `list_files` / `list_projects` / `query_project` / `update_project` / `health_check`（聚合 BrainMem 的 search_knowledge/query_memory/write_memory/reindex 对外）
+交付物（均已实现）：
+- [brainhub/cli.py](brainhub/cli.py) — `brainhub start/stop/status` + `brainhub ops archive/extract-memories/reindex/health`（typer，PID 文件管进程）
+- [brainhub/web/](brainhub/web/) — FastAPI + Jinja2 + HTMX + Alpine + Tailwind(CDN)，7 面板 + WS：知识库浏览/搜索/网盘/看板/记忆/agent状态/运维日志
+- [brainhub/storage/](brainhub/storage/) — [files.py](brainhub/storage/files.py) 文件 CRUD+缩略图（Pillow/pdf2image 懒生成）+ [archive.py](brainhub/storage/archive.py) `write_note` 归档（硬编码完整 Index.md 规则 + 漂移单测）+ [db.py](brainhub/storage/db.py) 懒加载单例 Store（镜像 brainmem.mcp）+ 独立 hub_conn（WAL 双连接同库）
+- [brainhub/projects/](brainhub/projects/models.py) — 项目/任务状态机（todo→doing→blocked→done，严格流，非法转移 raise）+ 拖拽落点
+- [brainhub/ops/](brainhub/ops/) — [extract.py](brainhub/ops/extract.py) 记忆提取（OpenClaw trajectory.jsonl → AsyncAnthropic 直调 → memory.db）+ [agent.py](brainhub/ops/agent.py) OpsAgent 接口壳（ReAct 留 Phase 3）+ [cron.py](brainhub/ops/cron.py) APScheduler（归档02:30/索引03:00/提取23:00/健康5min/Index更新03:30）
+- [brainhub/mcp.py](brainhub/mcp.py) — fastmcp 网关 11 工具：BrainHub 自有 7 个（write_note/read_file/list_files/list_projects/query_project/update_project/health_check）+ 转发 brainmem 4 个（search_knowledge/query_memory/write_memory/reindex）
+
+**验收**（已跑通）：① Web 目录树+语义搜索 ② Inbox 归档到 3-Knowledge/FPGA ③ extract-memories 写 memory.db ④ query_memory 返回健康事实+心跳异常实体 ⑤ 看板建项目+拖拽状态机 ⑥ MCP 11 工具全注册+health_check 全绿。18 个单测全过。
+
+**按计划降级**：OpsAgent 只留接口壳（ReAct 循环主体留 Phase 3），extract-memories 走直调 AsyncAnthropic 路径（已验证 LLM 网关 + bge 编码 + 实体抽取跑通）。详见 [PLAN.md](PLAN.md)。
 
 ## 关键决策（已确认）
 
@@ -38,10 +42,11 @@ BrainMem 已验收完成（Phase 1+2+3 全做完：知识库 RAG + 记忆六层 
 ## 与 BrainMem 的接口
 
 BrainHub import brainmem，直接调这些（不是走 MCP，是进程内 Python 调用）：
-- `brainmem.store.Store` — 共享 memory.db（同路径打开，WAL 并发）
-- `brainmem.searcher.Searcher.search()` / `query_memory()` — 检索
-- `brainmem.memorize.write_memory()` / `forget()` / `compress_working_to_episodic()` — 记忆写入
-- `brainmem.indexer.Indexer.index_root()` — 增量摄取（ops Cron 调）
+- `brainmem.store.Store` — 共享 memory.db（WAL + autocommit，同路径打开）。构造：`Store(db_path=BRAIN_DATA/memory.db, brain_data=BRAIN_DATA)`
+- `brainmem.searcher.Searcher` — `Searcher(store, config).search(query, k, time_range)` / `.query_memory(query, k, layers, time_range)`
+- `brainmem.memorize.Memorize` — `Memorize(store).write_memory(content, layer, entities, importance, tags, source)` / `.forget(layer, ...)` / `.compress_working_to_episodic(...)`。注意是**类**不是模块函数
+- `brainmem.indexer.Indexer` — `Indexer(store).index_root(root, full)` / `.index_roots([roots], full)`（多根）
+- `brainmem.searcher.load_config()` — 读 `BRAIN_DATA/config.toml`（可选，有默认值）
 
 对外 MCP 工具：BrainHub 自己实现的（write_note/read_file/list_files/projects/health_check）+ 转发 BrainMem 的（search_knowledge/query_memory/write_memory/reindex）。
 

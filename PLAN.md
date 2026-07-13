@@ -2,6 +2,12 @@
 
 > 摘自产品族 plan（`../brainmem/PRODUCT_FAMILY_PLAN.md`），只保留 BrainHub 相关部分。
 > 新会话读这份就够开工。前置：BrainMem 已验收完成（接口已稳）。
+>
+> **状态（2026-07-13）：Phase 2 已交付，6 项验收通过**（详见 [README.md](README.md)）。
+> 本文件保留计划期描述，关键差异已就地标注：
+> - 运维 agent 按"分阶段"降级——Phase 2 只留 OpsAgent 接口壳，extract-memories 走直调 AsyncAnthropic，ReAct 循环留 Phase 3。
+> - 与 BrainMem 的接口以实际代码为准（Memorize 是类不是模块函数），见 README「与 BrainMem 的接口」。
+> - 18 个单测全过（archive/projects/db）。
 
 ## BrainHub 定位
 
@@ -21,7 +27,7 @@ Brain 产品族三款之一，自用主入口。统一 Web 前端聚合所有面
 - `brainhub/storage/files.py` — 文件 CRUD + `files` 元数据表 + 缩略图（Pillow/pdf2image）
 - `brainhub/storage/archive.py` — `write_note` 归档（硬编码 Index.md 关键词→目录表，命中即停，兜底 Toolchain/）
 - `brainhub/projects/models.py` — `projects` + `tasks` 表，状态机 todo→doing→blocked→done
-- `brainhub/ops/agent.py` — 运维 agent（Anthropic SDK + xopglm52，ReAct 最多 10 步，失败 2 次换方法，动作写 ops_log）
+- `brainhub/ops/agent.py` — 运维 agent 接口壳（Anthropic SDK + xopglm52，ReAct 留 Phase 3）。Phase 2 的 LLM 路径走 extract.py 直调 AsyncAnthropic，非 ReAct 循环。预留 max_steps=10、fail_switch=2，动作写 ops_log 可回溯
 - `brainhub/ops/cron.py` — APScheduler Cron（归档/索引/记忆提取/健康检查/Index.md 更新）
 - `brainhub/mcp.py` — fastmcp 网关，暴露 BrainHub 工具 + 转发 BrainMem 工具
 
@@ -59,7 +65,7 @@ Brain 产品族三款之一，自用主入口。统一 Web 前端聚合所有面
 |---|---|---|
 | Inbox 归档 | 每日 02:30 | 扫 `2-Inbox/`，按 Index.md 规则分类，移到 `3-Knowledge/{分类}/` |
 | 索引重建 | 每日 03:00 | mtime 对比差异，调 BrainMem 增量摄取 |
-| 记忆提取 | 每日 23:00 | 拉 OpenClaw 当天对话日志，xopglm52 提取，写 memory.db |
+| 记忆提取 | 每日 23:00 | 拉 OpenClaw 当天对话日志（`d:\openclaw\data\.openclaw\agents\{main,ace,sentinel}\sessions\*.trajectory.jsonl`，按 `sessions.json` 的 `lastActiveAt` 过滤），AsyncAnthropic（xopglm52）直调抽取，写 memory.db |
 | 健康检查 | 每 5min | OpenClaw:18789 + HiClaw:18888 + 向量库 + 磁盘；异常 WS+Matrix 通知 |
 | Index.md 更新 | 每日 03:30 | 重统计目录文件数，重写速览表 |
 
@@ -117,10 +123,12 @@ CREATE TABLE ops_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, task TEXT,
 
 ## 技术要点
 
-- 运维 agent：Anthropic SDK + xopglm52，ReAct 循环（thought→action→observation），最多 10 步，失败 2 次换方法（沿用 AGENTS.md 红线）。动作写 ops_log 可回溯。
-- 单进程并发：ops LLM 走 httpx 异步不阻塞；embedding 调 BrainMem 时用 `run_in_executor` 丢线程池；重活交 BrainBridge Go（Phase 3）。
-- WS 推送：agent 状态灯 + 运维日志实时输出，单 `/ws` 连接按 topic 分发。
-- 缩略图：Pillow 处理图片，pdf2image 处理 PDF 首页，缓存到 `d:\braindata\cache\thumbs\`。
+- 运维 agent：**Phase 2 已降级为接口壳**（OpsAgent 类骨架，`async def run(task)` 占位抛 NotImplementedError，ReAct 主体留 Phase 3）。Phase 2 的 LLM 路径是 extract-memories 直调 `AsyncAnthropic`（单次 `messages.create`，无循环）。Phase 3 落地时再加：ReAct 循环（thought→action→observation），最多 10 步，失败 2 次换方法，动作写 ops_log 可回溯。注：仓库无 AGENTS.md 文件，红线（max_steps=10/fail_switch=2）作硬编码规格写进 config，不读外部文件。
+- 单进程并发：ops LLM 走 `anthropic.AsyncAnthropic`（httpx 异步）不阻塞；sync 的 brainmem 调用（`Searcher.search`/`query_memory` 可能加载 bge）用 `anyio.to_thread.run_sync` 丢线程池；web `/search`、`/memory` 路由同理包。重活交 BrainBridge Go（Phase 3）。
+- WS 推送：agent 状态灯 + 运维日志实时输出，单 `/ws` 连接按 topic（ops_log/agent_status）分发，`WSBroker` 内存广播，无订阅者 publish no-op。
+- 缩略图：Pillow 处理图片，pdf2image 处理 PDF 首页（需 poppler 在 PATH，缺失降级 broken-image），**懒生成**按预览请求、按 sha256 缓存到 `d:\braindata\cache\thumbs\`。
+- 模板：Starlette 1.x 的 `Jinja2Templates.TemplateResponse` 签名要求 `TemplateResponse(request, name, context)`（不是旧的 `TemplateResponse(name, context)`），所有路由按新签名调。
+- Store 共享：单例 Store（镜像 brainmem.mcp 懒加载）+ 独立 hub_conn 连同 memory.db（纯表无 vec/FTS，WAL 双连接，永不把 vec0 写和纯表写放同一 `BEGIN`）。
 
 ## 数据路径
 

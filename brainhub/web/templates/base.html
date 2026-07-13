@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrainHub</title>
+    <!-- Tailwind CDN（一人开发，零前端构建）-->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTMX：局部刷新，不刷新整页 -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <!-- Alpine.js：轻交互（拖拽/debounce/WS 订阅）-->
+    <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+    <style>
+        .nav-item.active { background-color: rgb(37 99 235); color: white; }
+        .agent-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 h-screen flex flex-col" x-data="brainHubApp()">
+    <!-- 顶栏 -->
+    <header class="bg-white border-b px-4 py-2 flex items-center gap-4">
+        <h1 class="text-lg font-bold">BrainHub</h1>
+        <!-- 全局语义搜索框：HTMX hx-post，结果灌入 #main -->
+        <form hx-post="/api/search?q={{ '' }}" hx-target="#main" hx-trigger="submit"
+              class="flex-1 max-w-2xl" @submit.prevent>
+            <input type="text" name="q" placeholder="全局语义搜索（调 BrainMem search_knowledge）…"
+                   class="w-full px-3 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   value="" />
+        </form>
+        <!-- agent 状态灯（Alpine 订阅 WS）-->
+        <div class="flex items-center gap-2 text-xs" x-cloak>
+            <span class="agent-dot" :class="agentOnline ? 'bg-green-500' : 'bg-gray-400'"></span>
+            <span x-text="agentOnline ? 'agent 在线' : 'agent 离线'"></span>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden">
+        <!-- 左侧导航 -->
+        <nav class="w-40 bg-white border-r p-2 flex flex-col gap-1 text-sm">
+            <a class="nav-item px-3 py-1.5 rounded cursor-pointer {{ 'active' if active_panel == 'knowledge' }}"
+               hx-get="/" hx-target="#main">知识库</a>
+            <a class="nav-item px-3 py-1.5 rounded cursor-pointer" hx-get="/search" hx-target="#main">搜索</a>
+            <a class="nav-item px-3 py-1.5 rounded cursor-pointer" hx-get="/files" hx-target="#main">网盘</a>
+            <a class="nav-item px-3 py-1.5 rounded cursor-pointer" hx-get="/board" hx-target="#main">项目看板</a>
+            <a class="nav-item px-3 py-1.5 rounded cursor-pointer" hx-get="/memory" hx-target="#main">记忆</a>
+            <a class="nav-item px-3 py-1.5 rounded cursor-pointer" hx-get="/agents" hx-target="#main">agent状态</a>
+            <a class="nav-item px-3 py-1.5 rounded cursor-pointer" hx-get="/ops" hx-target="#main">运维日志</a>
+        </nav>
+
+        <!-- 主区：HTMX hx-target，tab 切换不刷新整页 -->
+        <main id="main" class="flex-1 overflow-auto p-4">
+            {% block content %}
+            <!-- 默认知识库面板：目录树 + 预览分栏 -->
+            <div class="flex h-full gap-4">
+                <div class="w-1/3 bg-white border rounded p-3 overflow-auto" id="tree-container">
+                    <div class="text-sm font-semibold mb-2 text-gray-600">目录树（PARA）</div>
+                    <div hx-get="/api/tree?dir=" hx-trigger="load" hx-target="this"></div>
+                </div>
+                <div class="flex-1 bg-white border rounded p-3 overflow-auto" id="preview-container">
+                    <div class="text-gray-400 text-sm">点左侧文件预览…</div>
+                </div>
+            </div>
+            {% endblock %}
+        </main>
+    </div>
+
+    <script>
+        function brainHubApp() {
+            return {
+                agentOnline: false,
+                ws: null,
+                init() {
+                    // WS 订阅 agent_status topic（Phase 2 cron 任务起止推占位状态）
+                    try {
+                        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+                        this.ws = new WebSocket(`${proto}://${location.host}/ws`);
+                        this.ws.onopen = () => {
+                            this.ws.send(JSON.stringify({topics: ['agent_status', 'ops_log']}));
+                        };
+                        this.ws.onmessage = (e) => {
+                            const msg = JSON.parse(e.data);
+                            if (msg.topic === 'agent_status') {
+                                this.agentOnline = msg.online ?? false;
+                            }
+                        };
+                        this.ws.onclose = () => { this.agentOnline = false; };
+                    } catch (err) { console.warn('WS 连接失败', err); }
+                }
+            };
+        }
+        document.addEventListener('alpine:init', () => {
+            const root = document.querySelector('[x-data^="brainHubApp"]');
+            if (root) { const app = Alpine.getData('brainHubApp')(); root._x_dataStack = [app]; app.init(); }
+        });
+    </script>
+</body>
+</html>

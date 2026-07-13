@@ -1,0 +1,33 @@
+{# 记忆面板 partial #}
+<div class="max-w-4xl mx-auto">
+    <h2 class="text-sm font-semibold text-gray-600 mb-3">记忆检索（六层 + 图谱）</h2>
+    <form hx-post="/api/memory" hx-target="#main" class="flex gap-2 mb-4">
+        <input type="text" name="q" value="{{ q }}" placeholder="如：鑫宇最近身体怎么样"
+               class="flex-1 px-3 py-1.5 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <button class="px-4 py-1.5 bg-blue-600 text-white rounded text-sm">查记忆</button>
+    </form>
+
+    {% if error %}
+    <div class="text-red-600 text-sm bg-red-50 border border-red-200 rounded p-3 mb-3">
+        查询失败：{{ error }}
+        <div class="text-xs text-gray-500 mt-1">（首次查询会加载 bge 模型 + jieba）</div>
+    </div>
+    {% elif q and not results %}
+    <div class="text-gray-400 text-sm">未找到相关记忆。</div>
+    {% endif %}
+
+    <ul class="space-y-2">
+    {% for r in results %}
+        <li class="bg-white border rounded p-3">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">{{ r.layer }}</span>
+                <span class="text-xs text-gray-400">综合分 {{ r.score }} · {{ r.source }}</span>
+            </div>
+            <div class="text-sm text-gray-700">{{ r.content }}</div>
+            {% if r.entities %}
+            <div class="text-xs text-gray-500 mt-1">实体：{{ r.entities | join('、') }}</div>
+            {% endif %}
+        </li>
+    {% endfor %}
+    </ul>
+</div>

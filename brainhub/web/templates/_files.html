@@ -1,0 +1,52 @@
+{# 网盘 partial：文件列表 + 上传/删除 #}
+<div class="max-w-4xl mx-auto" x-data="{ dir: '{{ dir }}' }">
+    <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-600">网盘 {{ dir or '/' }}</h2>
+        <form hx-post="/api/files/upload" hx-target="#main" hx-encoding="multipart/form-data"
+              class="flex items-center gap-2 text-xs">
+            <input type="hidden" name="dir" :value="dir" value="{{ dir }}" />
+            <input type="file" name="file" class="text-xs" required />
+            <button class="px-3 py-1 bg-blue-600 text-white rounded">上传</button>
+        </form>
+    </div>
+
+    {% if error %}
+    <div class="text-red-600 text-sm bg-red-50 border border-red-200 rounded p-2 mb-3">{{ error }}</div>
+    {% endif %}
+
+    {% if dir %}
+    <div class="mb-2">
+        <a class="text-xs text-blue-600 hover:underline cursor-pointer"
+           hx-get="/files?dir={{ dir.rsplit('/', 1)[0] }}" hx-target="#main">⬆ 上级目录</a>
+    </div>
+    {% endif %}
+
+    <ul class="divide-y">
+    {% for e in entries %}
+        <li class="py-1.5 flex items-center justify-between text-sm">
+            <span class="flex items-center gap-2 truncate">
+                {% if e.is_dir %}
+                📁 <a class="cursor-pointer hover:text-blue-600 font-medium"
+                      hx-get="/files?dir={{ e.rel }}" hx-target="#main">{{ e.name }}</a>
+                {% else %}
+                📄 <a class="cursor-pointer hover:text-blue-600"
+                      hx-get="/api/preview?path={{ e.rel }}" hx-target="#preview-container"
+                      >{{ e.name }}</a>
+                {% endif %}
+            </span>
+            <span class="flex items-center gap-3 text-xs text-gray-400">
+                {% if not e.is_dir %}<span>{{ e.size }} B</span>{% endif %}
+                <span>{{ e.mtime[:10] if e.mtime else '' }}</span>
+                {% if not e.is_dir %}
+                <form hx-post="/api/files/delete" hx-target="#main" hx-confirm="删除 {{ e.name }}？"
+                      class="inline">
+                    <input type="hidden" name="path" value="{{ e.rel }}" />
+                    <button class="text-red-500 hover:text-red-700">删</button>
+                </form>
+                {% endif %}
+            </span>
+        </li>
+    {% endfor %}
+    </ul>
+    {% if not entries %}<div class="text-gray-400 text-sm">（空目录）</div>{% endif %}
+</div>
