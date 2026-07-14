@@ -59,8 +59,9 @@ def start(
     # 已在跑？
     if _pid_path().exists():
         old = _read_pid()
-        if old and _is_alive(old):
-            typer.echo(f"BrainHub 已在运行（PID {old}）。如需重启先 `brainhub stop`。")
+        old_main = old.get("main") if old else None
+        if old_main and _is_alive(old_main):
+            typer.echo(f"BrainHub 已在运行（PID {old_main}）。如需重启先 `brainhub stop`。")
             raise typer.Exit(code=1)
 
     import uvicorn
@@ -70,8 +71,10 @@ def start(
         os.environ["BRAINHUB_NO_CRON"] = "1"
 
     typer.echo(f"BrainHub 启动：http://{bind_host}:{bind_port}")
-    # 先写 PID 文件（本进程 PID；uvicorn.run 会阻塞，stop/status 读这个 PID）。
-    _pid_path().write_text(str(os.getpid()), encoding="utf-8")
+    # 先拉 brain-bridge serve 子进程（失败只警告，不挡 web 起）。
+    child_pid = _spawn_bridge()
+    # 写 PID 文件（主 + 子，JSON）。uvicorn.run 会阻塞，stop/status 读这个。
+    _write_pid(os.getpid(), child_pid)
     # workers=1：APScheduler 去重前提（多 worker 各跑一份 cron 会重复归档/索引）。
     try:
         uvicorn.run(
@@ -83,43 +86,49 @@ def start(
             log_level="info",
         )
     finally:
-        # uvicorn.run 退出后清理 PID
+        # uvicorn.run 退出后清理 PID（子进程 brain-bridge 不在这管，靠 stop 连杀或自退）
         _pid_path().unlink(missing_ok=True)
 
 
 @app.command()
 def stop():
-    """停止 BrainHub（读 PID 文件，terminate）。"""
-    pid = _read_pid()
-    if not pid:
+    """停止 BrainHub + brain-bridge 子进程（读 PID 文件，terminate）。"""
+    pids = _read_pid()
+    if not pids:
         typer.echo("BrainHub 未运行（无 PID 文件）。")
         raise typer.Exit(code=1)
-    if not _is_alive(pid):
-        typer.echo(f"PID {pid} 已不在，清理 PID 文件。")
-        _pid_path().unlink(missing_ok=True)
-        raise typer.Exit()
-    try:
-        import subprocess
-        if sys.platform == "win32":
-            # Windows：taskkill 杀进程树（比 CTRL_BREAK 可靠，无需进程组）
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                           capture_output=True)
-        else:
-            import signal
-            os.kill(pid, signal.SIGTERM)
-        typer.echo(f"已发送停止信号给 PID {pid}。")
-    except Exception as e:
-        typer.echo(f"停止失败：{e}", err=True)
-        raise typer.Exit(code=1)
+
+    main_pid = pids.get("main")
+    child_pid = pids.get("child")
+
+    # 主进程
+    if main_pid and _is_alive(main_pid):
+        _kill_pid(main_pid)
+        typer.echo(f"已发送停止信号给 BrainHub PID {main_pid}。")
+    elif main_pid:
+        typer.echo(f"主 PID {main_pid} 已不在。")
+
+    # brain-bridge 子进程（连子 PID 一起杀）
+    if child_pid and _is_alive(child_pid):
+        _kill_pid(child_pid)
+        typer.echo(f"已发送停止信号给 brain-bridge PID {child_pid}。")
+    elif child_pid:
+        typer.echo(f"子 PID {child_pid}（brain-bridge）已不在。")
+
     _pid_path().unlink(missing_ok=True)
 
 
 @app.command()
 def status():
     """查看 BrainHub 运行状态 + 索引统计。"""
-    pid = _read_pid()
-    running = pid and _is_alive(pid)
-    typer.echo(f"进程：{'运行中 (PID ' + str(pid) + ')' if running else '未运行'}")
+    pids = _read_pid()
+    main_pid = pids.get("main") if pids else None
+    child_pid = pids.get("child") if pids else None
+    running = main_pid and _is_alive(main_pid)
+    typer.echo(f"BrainHub：{'运行中 (PID ' + str(main_pid) + ')' if running else '未运行'}")
+    if child_pid:
+        child_alive = _is_alive(child_pid)
+        typer.echo(f"brain-bridge：{'运行中 (PID ' + str(child_pid) + ')' if child_alive else f'已退 (PID {child_pid})'}")
 
     # 轻量健康探针
     cfg = load_hub_config()
@@ -193,17 +202,41 @@ def ops_health():
 
 
 # ---------------------------------------------------------------------------
-# PID 文件助手
+# PID 文件助手（JSON，记 main + child 两个 PID）
 # ---------------------------------------------------------------------------
 
-def _read_pid() -> int | None:
+def _write_pid(main: int, child: int | None) -> None:
+    _pid_path().write_text(
+        json.dumps({"main": main, "child": child}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _read_pid() -> dict | None:
+    """读 PID 文件，返回 {"main":int, "child":int|None}。
+
+    兼容旧格式（纯文本单 PID）：纯数字则当 main，child=None。
+    """
     p = _pid_path()
     if not p.exists():
         return None
-    try:
-        return int(p.read_text().strip())
-    except Exception:
+    raw = p.read_text(encoding="utf-8").strip()
+    if not raw:
         return None
+    # 旧格式：纯文本单 PID
+    try:
+        return {"main": int(raw), "child": None}
+    except ValueError:
+        pass
+    # 新格式：JSON {"main","child"}
+    try:
+        d = json.loads(raw)
+        if isinstance(d, dict) and "main" in d:
+            return {"main": int(d["main"]),
+                    "child": int(d["child"]) if d.get("child") else None}
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return None
 
 
 def _is_alive(pid: int) -> bool:
@@ -223,6 +256,71 @@ def _is_alive(pid: int) -> bool:
             return True
     except Exception:
         return False
+
+
+def _kill_pid(pid: int) -> None:
+    """杀进程（Windows taskkill /T /F 杀整树，POSIX SIGTERM）。"""
+    import subprocess
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True)
+    else:
+        import signal
+        os.kill(pid, signal.SIGTERM)
+
+
+# ---------------------------------------------------------------------------
+# brain-bridge 子进程拉起
+# ---------------------------------------------------------------------------
+
+def _find_bridge_exe() -> str | None:
+    """找 brain-bridge 可执行文件路径。
+
+    优先 PATH（brain-bridge / brain-bridge.exe），再查 d:\\braincode\\brainbridge\\bin\\。
+    找不到返回 None。
+    """
+    import shutil
+    # 1. PATH
+    in_path = shutil.which("brain-bridge") or shutil.which("brain-bridge.exe")
+    if in_path:
+        return in_path
+    # 2. 构建产物目录（d:\braincode\brainbridge\bin\）
+    exe_name = "brain-bridge.exe" if sys.platform == "win32" else "brain-bridge"
+    for cand in (Path(r"d:\braincode\brainbridge\bin") / exe_name,
+                 Path(r"D:\braincode\brainbridge\bin") / exe_name):
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def _spawn_bridge() -> int | None:
+    """拉起 brain-bridge serve 子进程，返回子 PID（失败返回 None，不抛）。
+
+    brain-bridge 起不来只 log 警告，不影响 BrainHub web 起来
+    （管道客户端的 listener/writer 自带退化，bridge 不在也能降级）。
+    """
+    exe = _find_bridge_exe()
+    if not exe:
+        logger.warning("brain-bridge 未找到（PATH 无 + d:\\braincode\\brainbridge\\bin\\ 无构建产物），跳过子进程拉起。管道待联调。")
+        typer.echo("[warn] brain-bridge 未找到，跳过子进程拉起（web 照常起）。")
+        return None
+    try:
+        import subprocess
+        proc = subprocess.Popen(
+            [exe, "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            # Windows：不挂控制台，独立进程，父退不拽死子（父死子自退靠 stop 杀）
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+                            if sys.platform == "win32" else 0),
+        )
+        typer.echo(f"brain-bridge serve 已拉起（PID {proc.pid}）。")
+        logger.info(f"brain-bridge serve 拉起，子 PID={proc.pid}")
+        return proc.pid
+    except Exception as e:
+        logger.warning(f"brain-bridge serve 拉起失败：{e}（web 照常起）")
+        typer.echo(f"[warn] brain-bridge serve 拉起失败：{e}（web 照常起）。")
+        return None
 
 
 def main():
