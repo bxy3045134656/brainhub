@@ -86,7 +86,12 @@ def start(
             log_level="info",
         )
     finally:
-        # uvicorn.run 退出后清理 PID（子进程 brain-bridge 不在这管，靠 stop 连杀或自退）
+        # uvicorn.run 退出（正常停 / Ctrl+C / 崩溃）后：
+        # 1) 连子进程 brain-bridge 一起杀（防 Ctrl+C 退留孤儿 → 下次 start 撞端口）
+        # 2) 清 PID 文件
+        if child_pid and _is_alive(child_pid):
+            _kill_pid(child_pid)
+            typer.echo(f"已停止 brain-bridge 子进程（PID {child_pid}）。")
         _pid_path().unlink(missing_ok=True)
 
 
@@ -306,11 +311,21 @@ def _spawn_bridge() -> int | None:
         return None
     try:
         import subprocess
+        # 重定向到 BRAIN_DATA/logs/brain-bridge.{out,err}.log（append），
+        # bridge 静默挂时有线索可查（跟 brainhub.pid 同目录）。
+        log_dir = logs_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        out_log = log_dir / "brain-bridge.out.log"
+        err_log = log_dir / "brain-bridge.err.log"
+        out_fp = open(out_log, "ab", buffering=0)
+        err_fp = open(err_log, "ab", buffering=0)
+        typer.echo(f"brain-bridge 日志：{out_log} / {err_log}")
         proc = subprocess.Popen(
             [exe, "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            # Windows：不挂控制台，独立进程，父退不拽死子（父死子自退靠 stop 杀）
+            stdout=out_fp,
+            stderr=err_fp,
+            # Windows：不挂控制台，独立进程组；父 Ctrl+C 退不拽死子，
+            # 但 uvicorn.run finally 会显式杀子（见 start），防孤儿。
             creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
                             if sys.platform == "win32" else 0),
         )
