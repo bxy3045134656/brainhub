@@ -321,7 +321,7 @@ def _spawn_bridge() -> int | None:
         err_fp = open(err_log, "ab", buffering=0)
         typer.echo(f"brain-bridge 日志：{out_log} / {err_log}")
         proc = subprocess.Popen(
-            [exe, "serve"],
+            [exe, "serve", "--matrix-send-only"],
             stdout=out_fp,
             stderr=err_fp,
             # Windows：不挂控制台，独立进程组；父 Ctrl+C 退不拽死子，
