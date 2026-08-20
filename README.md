@@ -1,75 +1,62 @@
 # BrainHub — 统一 Web 前端 + 网盘 + MCP 网关 + 运维 agent
 
-> Brain 产品族的自用主入口产品。聚合所有面板（知识库/搜索/网盘/看板/记忆/agent状态/运维日志），网盘文件 CRUD，MCP 网关聚合对外，内置运维 agent（自动归档/索引重建/记忆提取/健康检查）。
-> 依赖 [BrainMem](../brainmem/)（import 当库用，调其检索/记忆 API + 共享 memory.db）。
+> Brain 产品族的**自用主入口**：一个 FastAPI 单进程聚合所有面板（知识库 / 搜索 / 网盘 / 看板 / 记忆 / agent 状态 / 运维日志），对外提供**单一 MCP 网关**，内置运维 agent 自动维护知识库与记忆。
 
-## 当前状态
+## 简介
 
-**Phase 2 — 统一前端 + 网盘 + 运维 agent（已交付，6 项验收通过）**
+BrainHub 是 Brain 产品族的使用入口，负责把产品族全部能力收拢到一个可操作的界面与一套 API 里：
 
-BrainMem 已验收完成（Phase 1+2+3 全做完：知识库 RAG + 记忆六层 + 图谱 + 三路混合检索 + MCP 工具 + 测试）。BrainHub import brainmem 当库用，共享 `d:\braindata\memory.db`。
+- **Web 面板**：Jinja2 + HTMX 零前端构建，知识库浏览 / 语义搜索 / 网盘 CRUD / 看板任务状态机 / 记忆 / agent 状态 / 运维日志
+- **JSON API v1**：`/api/v1/*` 供桌面端 React 前端调用
+- **MCP 网关**：聚合 BrainHub 自有工具 + BrainMem 检索工具共 12 个，任何 agent 只连这一个入口
+- **运维 agent**：定时归档、索引重建、记忆提取、健康检查
 
-交付物（均已实现）：
-- [brainhub/cli.py](brainhub/cli.py) — `brainhub start/stop/status` + `brainhub ops archive/extract-memories/reindex/health`（typer，PID 文件管进程）
-- [brainhub/web/](brainhub/web/) — FastAPI + Jinja2 + HTMX + Alpine + Tailwind(CDN)，7 面板 + WS：知识库浏览/搜索/网盘/看板/记忆/agent状态/运维日志
-- [brainhub/storage/](brainhub/storage/) — [files.py](brainhub/storage/files.py) 文件 CRUD+缩略图（Pillow/pdf2image 懒生成）+ [archive.py](brainhub/storage/archive.py) `write_note` 归档（硬编码完整 Index.md 规则 + 漂移单测）+ [db.py](brainhub/storage/db.py) 懒加载单例 Store（镜像 brainmem.mcp）+ 独立 hub_conn（WAL 双连接同库）
-- [brainhub/projects/](brainhub/projects/models.py) — 项目/任务状态机（todo→doing→blocked→done，严格流，非法转移 raise）+ 拖拽落点
-- [brainhub/ops/](brainhub/ops/) — [extract.py](brainhub/ops/extract.py) 记忆提取（OpenClaw trajectory.jsonl → AsyncAnthropic 直调 → memory.db）+ [agent.py](brainhub/ops/agent.py) OpsAgent 接口壳（ReAct 留 Phase 3）+ [cron.py](brainhub/ops/cron.py) APScheduler（归档02:30/索引03:00/提取23:00/健康5min/Index更新03:30）
-- [brainhub/pipe/](brainhub/pipe/) — 命名管道客户端（BrainHub↔BrainBridge）：[protocol.py](brainhub/pipe/protocol.py) envelope 构造（对齐协议宪法§3）+ [writer.py](brainhub/pipe/writer.py) 写客户端连 `brain-matrix-out`（pywin32 CreateFile，失败重试+WaitNamedPipe，fire-and-forget 不抛）+ [listener.py](brainhub/pipe/listener.py) 读端 listener 起 `brain-matrix-in`+`brain-agent-status`（CreateNamedPipe 后台线程，按行解析 JSON 推 WSBroker）
-- [brainhub/mcp.py](brainhub/mcp.py) — fastmcp 网关 12 工具：BrainHub 自有 8 个（write_note/read_file/list_files/list_projects/query_project/update_project/health_check/**send_matrix_msg**）+ 转发 brainmem 4 个（search_knowledge/query_memory/write_memory/reindex）
+自用期一个 `brainhub start` 把主进程全部拉起：import brainmem 当检索后端、拉起 brain-bridge 子进程，对外像一个软件。
 
-**验收**（已跑通）：① Web 目录树+语义搜索 ② Inbox 归档到 3-Knowledge/FPGA ③ extract-memories 写 memory.db ④ query_memory 返回健康事实+心跳异常实体 ⑤ 看板建项目+拖拽状态机 ⑥ MCP 11 工具全注册+health_check 全绿。18 个单测全过。
+## 特性
 
-**按计划降级**：OpsAgent 只留接口壳（ReAct 循环主体留 Phase 3），extract-memories 走直调 AsyncAnthropic 路径（已验证 LLM 网关 + bge 编码 + 实体抽取跑通）。详见 [PLAN.md](PLAN.md)。
+- 🖥️ **统一面板** — 7 类页面聚合在一个服务，HTMX 局部刷新 + Alpine 轻交互，无需前端构建链
+- 🔌 **单一 MCP 入口** — `write_note` / `read_file` / `list_files` / 项目状态机 / `health_check` / `send_matrix_msg` + 转发 BrainMem 检索工具
+- 🤖 **运维 agent** — APScheduler 定时：归档 / 索引重建 / 记忆提取 / 健康检查，无需外部编排
+- 📁 **网盘** — BRAIN_ROOT 文件浏览、上传下载、缩略图懒生成、越界与敏感路径拦截
+- 📋 **看板** — 项目/任务状态机（todo → doing → blocked → done，严格流转）
+- 🔗 **协作对接** — 经命名管道把 `send_matrix_msg` 转发给 BrainBridge daemon，前端 WS 实时收 Matrix 消息与 agent 状态
+- 💻 **桌面端同源挂载** — `/app` 挂载 brainhub-desktop 构建产物，同源免 CORS
 
-## 关键决策（已确认）
+## 架构组成
 
-| 项 | 决策 | 理由 |
-|---|---|---|
-| 前端栈 | FastAPI + Jinja2 + HTMX + Alpine.js + Tailwind(CDN) | 一人开发，零前端构建。HTMX 局部刷新 + Alpine 轻交互（拖拽/debounce/WS） |
-| 运维 agent | 核心应用内起，Anthropic SDK + xopglm52 | 不复用 OpenClaw Gateway（链路长、Cron 自控、工具是内部 API 不绕 MCP）。ReAct 最多 10 步，失败 2 次换方法 |
-| 归档规则 | 硬编码 Index.md 关键词→目录表 | 确定性、可解释，不靠 LLM 推断目录。LLM 只用于记忆提取 |
-| 与 BrainMem 关系 | import brainmem 当库用 + 共享 memory.db | BrainMem 拥有 memory.db 写权，BrainHub ops 也写（同库靠 SQLite WAL 并发）。不重新实现检索 |
-| 与 OpenClaw 边界 | OpenClaw 诺诺=对话/社交/梦境；BrainHub ops=知识库索引/记忆维护/归档 | 避免双写冲突。诺诺调知识库走 MCP 只读为主，写操作由 ops 统一 |
-| 与 BrainBridge 接口 | BrainHub 暴露 send_matrix_msg MCP 工具，经命名管道转发给 Bridge daemon | agent 单一连 BrainHub MCP；BrainHub 当 listener(in+agent_status) / client(matrix-out)，pywin32；fire-and-forget。详见 [docs/protocol-constitution.md](docs/protocol-constitution.md) §3.2 |
-| 部署形态 | BrainHub 当主进程，拉起 brain-bridge 子进程（Phase 3） | 自用期一个 `brainhub start` 全拉起，对外像一个软件 |
+| 目录 | 职责 |
+|---|---|
+| `web/` | FastAPI 应用 + Jinja2 模板 + WS；`routes/api.py` 为桌面端 JSON API v1 |
+| `storage/` | 文件 CRUD + 缩略图、`write_note` 归档、共享 memory.db 的懒加载 Store |
+| `projects/` | 项目/任务状态机模型 |
+| `ops/` | 运维 agent：记忆提取、OpsAgent 接口、APScheduler 定时 |
+| `pipe/` | 命名管道客户端（与 BrainBridge 通信，envelope 对齐协议宪法 §3） |
+| `mcp.py` | fastmcp 网关：自有工具 + 转发 BrainMem 工具 |
+| `cli.py` | `brainhub start / stop / status` + `ops` 子命令 |
+
+## 快速开始
+
+```bash
+# 安装（Python 3.10+，uv 管理；依赖 BrainMem editable 安装）
+uv sync
+uv pip install -e ../brainmem
+
+# 启动（拉起 Web + MCP 网关 + brain-bridge 子进程）
+uv run brainhub start
+
+# 运维子命令
+uv run brainhub ops archive
+uv run brainhub ops reindex
+uv run brainhub ops health
+```
 
 ## 文档索引
 
-- [README.md](README.md) — 本文件，BrainHub 定位 + Phase 2 范围 + 关键决策
-- [PLAN.md](PLAN.md) — BrainHub 实现计划（验收/面板/运维Cron/MCP工具/依赖）
-- [docs/protocol-constitution.md](docs/protocol-constitution.md) — 协议宪法（MCP 工具签名 + memory.db schema + Matrix envelope，写代码前必读；与 BrainMem 同一份）
-- [../brainmem/PRODUCT_FAMILY_PLAN.md](../brainmem/PRODUCT_FAMILY_PLAN.md) — 产品族全局 plan（跨产品参考，查 BrainBridge 边界/HX470 迁移/风险权衡）
+- [PLAN.md](PLAN.md) — 实现计划与**当前进度**（Phase 1-3 验收、面板、运维 Cron、MCP 工具、依赖）
+- [docs/protocol-constitution.md](docs/protocol-constitution.md) — 协议宪法：MCP 工具签名 / memory.db schema / Matrix envelope
+- [../brainmem/PRODUCT_FAMILY_PLAN.md](../brainmem/PRODUCT_FAMILY_PLAN.md) — 产品族全局 plan（跨产品边界、HX470 迁移、风险权衡）
 
-## 与 BrainMem 的接口
+## 相关项目
 
-BrainHub import brainmem，直接调这些（不是走 MCP，是进程内 Python 调用）：
-- `brainmem.store.Store` — 共享 memory.db（WAL + autocommit，同路径打开）。构造：`Store(db_path=BRAIN_DATA/memory.db, brain_data=BRAIN_DATA)`
-- `brainmem.searcher.Searcher` — `Searcher(store, config).search(query, k, time_range)` / `.query_memory(query, k, layers, time_range)`
-- `brainmem.memorize.Memorize` — `Memorize(store).write_memory(content, layer, entities, importance, tags, source)` / `.forget(layer, ...)` / `.compress_working_to_episodic(...)`。注意是**类**不是模块函数
-- `brainmem.indexer.Indexer` — `Indexer(store).index_root(root, full)` / `.index_roots([roots], full)`（多根）
-- `brainmem.searcher.load_config()` — 读 `BRAIN_DATA/config.toml`（可选，有默认值）
-
-对外 MCP 工具：BrainHub 自己实现的（write_note/read_file/list_files/projects/health_check/**send_matrix_msg**）+ 转发 BrainMem 的（search_knowledge/query_memory/write_memory/reindex）。
-
-## 与 BrainBridge 的接口（命名管道）
-
-BrainHub 不直连 Matrix，经命名管道把消息交给 BrainBridge daemon 真正收发。agent 只连 BrainHub MCP（单一入口），调 `send_matrix_msg` 时 BrainHub 往管道写 envelope，Bridge 读后转发。
-
-| 管道 | 方向 | BrainHub 端 | 内容 |
-|---|---|---|---|
-| `\\.\pipe\brain-matrix-out` | BrainHub→Bridge | client（`pipe/writer.py`，CreateFile 连入写） | envelope 每行 JSON + `\n` |
-| `\\.\pipe\brain-matrix-in` | Bridge→BrainHub | listener（`pipe/listener.py`，CreateNamedPipe 等连入） | Matrix 收到的消息 |
-| `\\.\pipe\brain-agent-status` | Bridge→BrainHub | listener（同上） | `{agents:[...], ts}` 帧 |
-
-envelope = 协议宪法 §3（`{type, from, to, task_id, spec_ref, text, ts}`，type ∈ task_assign/task_result/heartbeat/notify）。fire-and-forget 无 ack，写失败仅 log 不抛。读端按行解析后经 `run_coroutine_threadsafe` 推 WSBroker（topic=`matrix_in`/`agent_status`），前端 `/ws` 订阅接收。
-
-实现：pywin32（Windows 命名管道 listener 必须，stdlib `open` 做不了 listener）；退化——非 Windows / 缺 pywin32 时 listener 不启，写端降级 `open()`，不阻塞 web。
-
-⚠ 待联调：BrainBridge 的 `matrix/pipe.go` Windows 端 go-winio listener 尚未接（返回 errWindowsPipeNotImpl）。BrainHub 端已就绪，Bridge 补 go-winio 后即可端到端联调（`send_matrix_msg` 的 `ok` 会变 True，前端 `/ws` 能收 Bridge 推来的消息）。9 个单测含回环（起 listener→writer 连入写一行→on_frame 收到解析 dict）。
-
-## 开发环境
-
-- Windows 11, Python 3.10.20, uv 0.11.17
-- 依赖：fastapi, uvicorn[standard], jinja2, python-multipart, anthropic, watchdog, Pillow, pdf2image, httpx, apscheduler
-- 前置：BrainMem 已 `pip install -e ../brainmem`（本地 editable 装好）
+Brain 产品族：[BrainMem](https://github.com/bxy3045134656/brainmem)（记忆引擎）· **BrainHub**（本仓库）· [BrainBridge](https://github.com/bxy3045134656/brainbridge)（协作网关）

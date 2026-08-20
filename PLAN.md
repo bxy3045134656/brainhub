@@ -2,13 +2,16 @@
 
 > 摘自产品族 plan（`../brainmem/PRODUCT_FAMILY_PLAN.md`），只保留 BrainHub 相关部分。
 > 新会话读这份就够开工。前置：BrainMem 已验收完成（接口已稳）。
->
-> **状态（2026-07-13）：Phase 2 已交付，6 项验收通过**（详见 [README.md](README.md)）。
-> **状态（2026-07-14）：管道客户端就绪**（BrainHub↔BrainBridge 命名管道，见下「管道客户端」段；send_matrix_msg 实现方按宪法修订改归 BrainHub）。
-> 本文件保留计划期描述，关键差异已就地标注：
-> - 运维 agent 按"分阶段"降级——Phase 2 只留 OpsAgent 接口壳，extract-memories 走直调 AsyncAnthropic，ReAct 循环留 Phase 3。
-> - 与 BrainMem 的接口以实际代码为准（Memorize 是类不是模块函数），见 README「与 BrainMem 的接口」。
-> - 18 个单测全过（archive/projects/db）；管道客户端加 9 个（含回环），共 27。
+
+## 当前进度
+
+**Phase 1-3 已完成**，验收要点：
+- ① Web 目录树 + 语义搜索 ② Inbox 归档到 3-Knowledge/FPGA ③ extract-memories 写 memory.db ④ query_memory 返回健康事实 + 心跳异常实体 ⑤ 看板建项目 + 拖拽状态机 ⑥ MCP 工具全注册 + health_check 全绿
+- 运维 agent 按分阶段降级：Phase 2 只留 OpsAgent 接口壳，extract-memories 走直调 AsyncAnthropic，ReAct 循环留 Phase 3
+- 与 BrainMem 接口以实际代码为准（Memorize 是类不是模块函数）
+- 管道客户端就绪（BrainHub↔BrainBridge 命名管道，envelope 对齐宪法 §3；send_matrix_msg 实现方按宪法修订归 BrainHub）
+- 近期（2026-08）：JSON API v1 路由（桌面端 React 用）、/app 挂载 brainhub-desktop dist、启动 PID+端口双重探活清理残留
+- 27 个单测全过（archive/projects/db + 管道客户端回环）
 
 ## BrainHub 定位
 
