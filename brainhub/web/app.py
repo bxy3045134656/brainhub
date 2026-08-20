@@ -87,9 +87,18 @@ def create_app() -> FastAPI:
     if Path(static_dir()).is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir())), name="static")
 
+    # 桌面端 React 前端（brainhub-desktop/dist）mount 到 /app。
+    # SPA：HTML=True 让 react-router 子路由都回 index.html，同源 7788 免 CORS。
+    # dist 不存在时（前端没 build）静默跳过，Jinja 页照常在 /。
+    react_dist = Path(__file__).resolve().parent.parent.parent.parent / "brainhub-desktop" / "dist"
+    if react_dist.is_dir():
+        app.mount("/app", StaticFiles(directory=str(react_dist), html=True), name="react")
+    else:
+        logger.info("brainhub-desktop/dist 不存在，/app 未挂载（先 pnpm build）")
+
     # 里程碑 A/B/C 路由
     from brainhub.web.routes import (
-        knowledge, search, ws, files, board, memory, agents, ops,
+        knowledge, search, ws, files, board, memory, agents, ops, api,
     )
     app.include_router(knowledge.router)
     app.include_router(search.router)
@@ -99,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(memory.router)
     app.include_router(agents.router)
     app.include_router(ops.router)
+    app.include_router(api.router)  # JSON API v1（桌面端 React 用，/api/v1/*）
 
     return app
 

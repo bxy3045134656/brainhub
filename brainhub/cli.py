@@ -56,13 +56,19 @@ def start(
     bind_port = port or bh.get("port", DEFAULT_PORT)
     bind_host = host or bh.get("host", "127.0.0.1")
 
-    # 已在跑？
+    # 已在跑？— PID 文件 + 端口探活双重判断。
+    # 只看 PID 活不够：被 Job Object 强杀时 PID 可能短暂残留/复用，且 uvicorn
+    # reloader 子进程可能逃逸 Job Object。端口通才算真在跑。
     if _pid_path().exists():
         old = _read_pid()
         old_main = old.get("main") if old else None
-        if old_main and _is_alive(old_main):
-            typer.echo(f"BrainHub 已在运行（PID {old_main}）。如需重启先 `brainhub stop`。")
+        if old_main and _is_alive(old_main) and _port_alive(bind_host, bind_port):
+            typer.echo(f"BrainHub 已在运行（PID {old_main}，端口 {bind_port} 占用）。如需重启先 `brainhub stop`。")
             raise typer.Exit(code=1)
+        # PID 死了 / 端口没占 = 残留 PID 文件，清掉继续启。
+        _pid_path().unlink(missing_ok=True)
+        if old_main:
+            typer.echo(f"清理残留 PID 文件（旧 PID {old_main} 未在 {bind_port} 监听）。")
 
     import uvicorn
 
@@ -263,6 +269,16 @@ def _is_alive(pid: int) -> bool:
         return False
 
 
+def _port_alive(host: str, port: int) -> bool:
+    """端口是否被占用（=有服务在监听）。比 PID 死活更可靠地判断「真在跑」。"""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
 def _kill_pid(pid: int) -> None:
     """杀进程（Windows taskkill /T /F 杀整树，POSIX SIGTERM）。"""
     import subprocess
@@ -324,9 +340,9 @@ def _spawn_bridge() -> int | None:
             [exe, "serve", "--matrix-send-only"],
             stdout=out_fp,
             stderr=err_fp,
-            # Windows：不挂控制台，独立进程组；父 Ctrl+C 退不拽死子，
-            # 但 uvicorn.run finally 会显式杀子（见 start），防孤儿。
-            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+            # Windows：不挂控制台（CREATE_NO_WINDOW 防父无控制台时新建黑框），
+            # 独立进程组；父 Ctrl+C 退不拽死子，但 uvicorn.run finally 会显式杀子（见 start），防孤儿。
+            creationflags=((subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
                             if sys.platform == "win32" else 0),
         )
         typer.echo(f"brain-bridge serve 已拉起（PID {proc.pid}）。")

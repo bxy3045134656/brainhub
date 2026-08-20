@@ -29,6 +29,18 @@ DEFAULT_PORT = 7788
 DEFAULT_OPENCLAW_DATA = r"d:\openclaw\data\.openclaw"
 
 # BrainHub 追加表 schema（与 brainmem 的 memory.db 同库，纯表无 vec/FTS，幂等建）。
+
+# 读写路径拒绝清单（统一入口：mcp.py / api.py / files.py 共用，防漂移）。
+# 相对 BRAIN_ROOT 的路径（正斜杠）命中任一子串即拒绝。
+READ_BLOCKED_PATTERNS = [".trash/", "secrets.json", ".git/", ".venv/", ".uv/", "__pycache__/"]
+
+
+def is_blocked_path(rel_str: str) -> bool:
+    """相对路径是否被拒（统一实现，各处引用避免重复定义漂移）。"""
+    rel_str = rel_str.replace("\\", "/")
+    return any(p in rel_str for p in READ_BLOCKED_PATTERNS)
+
+
 SCHEMA_HUB = """
 -- 网盘文件元数据
 CREATE TABLE IF NOT EXISTS files (

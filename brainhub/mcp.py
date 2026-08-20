@@ -23,7 +23,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from brainhub.config import brain_root, brain_data, db_path
+from brainhub.config import brain_root, brain_data, db_path, is_blocked_path
 from brainhub.storage.db import (
     get_store, get_searcher, get_memorize, get_indexer, get_hub_conn,
 )
@@ -35,13 +35,7 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("brainhub")
 
-# 复用 brainmem.mcp 的拒绝清单（read_file/list_files 安全）
-_READ_BLOCKED_PATTERNS = [".trash/", "secrets.json", ".git/", ".venv/", ".uv/", "__pycache__/"]
-
-
-def _is_blocked(rel_str: str) -> bool:
-    rel_str = rel_str.replace("\\", "/")
-    return any(p in rel_str for p in _READ_BLOCKED_PATTERNS)
+# 路径拒绝清单统一在 brainhub.config（read_file/list_files 安全）
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +75,7 @@ def read_file(path: str, range: str | None = None) -> dict[str, Any]:
         rel = p.resolve().relative_to(root.resolve())
     except ValueError:
         return {"error": f"路径越出 BRAIN_ROOT：{path}"}
-    if _is_blocked(str(rel)):
+    if is_blocked_path(str(rel)):
         return {"error": f"路径被拒绝（.trash/secrets/越界）：{path}"}
     if not p.is_file():
         return {"error": f"文件不存在：{path}"}
@@ -132,7 +126,7 @@ def list_files(dir: str = ".", pattern: str | None = None,
         rel = d.resolve().relative_to(root.resolve())
     except ValueError:
         return {"error": f"目录越出 BRAIN_ROOT：{dir}"}
-    if _is_blocked(str(rel)):
+    if is_blocked_path(str(rel)):
         return {"error": f"目录被拒绝：{dir}"}
     if not d.is_dir():
         return {"error": f"目录不存在：{dir}"}
@@ -146,7 +140,7 @@ def list_files(dir: str = ".", pattern: str | None = None,
             r = f.resolve().relative_to(root.resolve())
         except ValueError:
             continue
-        if _is_blocked(str(r)):
+        if is_blocked_path(str(r)):
             continue
         if pattern and not fnmatch.fnmatch(f.name, pattern):
             continue

@@ -15,20 +15,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from brainhub.config import brain_root, thumbs_dir
+from brainhub.config import brain_root, thumbs_dir, is_blocked_path
 
 logger = logging.getLogger(__name__)
 
-# 复用 brainmem.mcp 的拒绝清单（与 knowledge 路由一致）
-_READ_BLOCKED_PATTERNS = [".trash/", "secrets.json", ".git/", ".venv/", ".uv/", "__pycache__/"]
-
 # 图片后缀（Pillow 能处理的常见类型）
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
-
-
-def _is_blocked(rel_str: str) -> bool:
-    rel_str = rel_str.replace("\\", "/")
-    return any(p in rel_str for p in _READ_BLOCKED_PATTERNS)
 
 
 def _safe_resolve(rel: str) -> Path:
@@ -39,7 +31,7 @@ def _safe_resolve(rel: str) -> Path:
         rel_to_root = p.relative_to(root.resolve())
     except ValueError:
         raise ValueError(f"路径越出 BRAIN_ROOT：{rel}")
-    if _is_blocked(str(rel_to_root)):
+    if is_blocked_path(str(rel_to_root)):
         raise ValueError(f"路径被拒绝：{rel}")
     return p
 
@@ -88,7 +80,7 @@ class FileRepo:
         out: list[dict[str, Any]] = []
         for child in sorted(base.iterdir(), key=lambda c: (not c.is_dir(), c.name.lower())):
             rel = str(child.relative_to(brain_root().resolve())).replace("\\", "/")
-            if _is_blocked(rel):
+            if is_blocked_path(rel):
                 continue
             is_dir = child.is_dir()
             size = 0 if is_dir else child.stat().st_size
